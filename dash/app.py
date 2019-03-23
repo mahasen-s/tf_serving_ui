@@ -2,8 +2,7 @@ import dash
 from dash.dependencies import Input, Output, State
 import dash_core_components as dcc
 import dash_html_components as html
-#import dash_table_experiments as dt                                                                                                                                                           
-
+#import dash_table_experiments as dt                                                
 
 import datetime
 import json
@@ -16,10 +15,17 @@ from PIL import Image
 from base64 import decodestring
 import os
 import flask
+import redis
+import requests
+
+
 
 app = dash.Dash(__name__)
 
+cache = redis.Redis(host='redis', port = 6379)
+
 app.scripts.config.serve_locally = True
+
 
 app.layout = html.Div([
     dcc.Upload(
@@ -45,10 +51,13 @@ app.layout = html.Div([
 ])
 
 
-def parse_contents(contents, filename):
+def parse_contents(contents, filename, pred):
     return html.Div([
         html.H3(filename),
-
+        html.Pre(pred, style={
+            'whiteSpace': 'pre-wrap',
+            'wordBreak': 'break-all'
+        }),
         # HTML images accept base64 encoded strings in the same format
         # that is supplied by the upload
         html.Img(src=contents),
@@ -61,9 +70,22 @@ def parse_contents(contents, filename):
               [State('upload-image', 'filename')])
 def update_output(list_of_contents, list_of_names):
     if list_of_contents is not None:
+        list_of_preds = []
+        for ind, img in enumerate(list_of_contents):
+            print('Processing img {}\n'.format(ind))
+            img = img.split(',')[1]
+            img_str = img.encode('ascii')
+            if cache.exists(img_str) == False:
+                pred = get_predictions(img_str)
+#                pred = str(ind)
+                cache.set(img_str, pred)
+            else:
+                pred = cache.get(img_str)
+
+            list_of_preds.append(pred)
         children = [
-            parse_contents(content, name) for content, name in
-            zip(list_of_contents, list_of_names)]
+            parse_contents(content, name, pred) for content, name, pred in
+            zip(list_of_contents, list_of_names, list_of_preds)]
         return children
 
 
@@ -96,5 +118,10 @@ def predict_json_payload(img_str_list):
     payload = {"instances": [imstr2np(x).tolist() for x in img_str_list]}
     return payload
 
+def get_predictions(img_str):
+    payload = predict_json_payload([img_str])
+    req = requests.post('http://tf_serving:8080/v1/models/default:predict', json=payload)
+    return req.json()
+
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(host='0.0.0.0',debug=True)

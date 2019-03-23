@@ -1,0 +1,21 @@
+version: '3.0'
+
+services:
+    frontend:
+        build: ./dash
+        depends_on:
+            - tf_serving
+            - redis
+        ports:
+            - 8050:8050
+
+    redis:
+        image: redis:alpine
+        restart: always
+
+    tf_serving:
+        build: ./tf_serving
+        volumes:
+            - ./tf_serving/models:/models
+        ports:
+            - 8080:8080

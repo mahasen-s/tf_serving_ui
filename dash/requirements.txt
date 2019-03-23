@@ -1,0 +1,7 @@
+dash
+pandas
+plotly
+numpy
+pillow
+flask
+redis
