@@ -24,9 +24,7 @@ import cv2
 
 
 app = dash.Dash(__name__)
-
 cache = redis.Redis(host='redis', port = 6379)
-
 app.scripts.config.serve_locally = True
 
 
@@ -75,22 +73,24 @@ def update_output(list_of_contents, list_of_names):
     processed_imgs = []
     if list_of_contents is not None:
         for ind, img in enumerate(list_of_contents):
-            print('Processing img {}\n'.format(ind))
-
-            # Hacky
-            img0 = img.split(',')[1]
-            imgdata = decodestring(img0.encode('ascii'))
             
-            img_tmp_name = "img_tmp.jpg"
-            with open(img_tmp_name,"wb") as f:
-                f.write(imgdata)
+            if cache.exists(img) == False:
+                # Hacky
+                img0 = img.split(',')[1]
+                imgdata = decodestring(img0.encode('ascii'))
+                
+                img_tmp_name = "img_tmp.jpg"
+                with open(img_tmp_name,"wb") as f:
+                    f.write(imgdata)
 
-            # Get predictions
-            pred = get_predictions(img_tmp_name)
-            img1 = draw_preds(img_tmp_name, pred)
+                # Get predictions
+                pred = get_predictions(img_tmp_name)
+                img1 = draw_preds(img_tmp_name, pred)
 
-            # Append to list
-            processed_imgs.append(img1)
+                # Add to cache
+                cache.set(img, pickle.dumps(img1))
+                
+            processed_imgs.append(pickle.loads(cache.get(img)))
 
 
         children = [
