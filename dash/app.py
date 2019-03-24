@@ -12,11 +12,14 @@ import io
 import numpy as np
 from io import BytesIO
 from PIL import Image
-from base64 import decodestring
+from base64 import decodestring, b64encode
 import os
 import flask
 import redis
 import requests
+import pickle
+import cv2
+
 
 
 
@@ -51,16 +54,16 @@ app.layout = html.Div([
 ])
 
 
-def parse_contents(contents, filename, pred):
+def parse_contents(contents, filename):
     return html.Div([
         html.H3(filename),
-        html.Pre(pred, style={
-            'whiteSpace': 'pre-wrap',
-            'wordBreak': 'break-all'
-        }),
+        #html.Pre(pred, style={
+        #    'whiteSpace': 'pre-wrap',
+        #    'wordBreak': 'break-all'
+        #}),
         # HTML images accept base64 encoded strings in the same format
         # that is supplied by the upload
-        html.Img(src=contents),
+        html.Img(src='data:image/png;base64,{}'.format(contents)),
         html.Hr(),
     ], style={'textAlign':'center'})
 
@@ -69,23 +72,30 @@ def parse_contents(contents, filename, pred):
               [Input('upload-image', 'contents')],
               [State('upload-image', 'filename')])
 def update_output(list_of_contents, list_of_names):
+    processed_imgs = []
     if list_of_contents is not None:
-        list_of_preds = []
         for ind, img in enumerate(list_of_contents):
             print('Processing img {}\n'.format(ind))
-            img = img.split(',')[1]
-            img_str = img.encode('ascii')
-            if cache.exists(img_str) == False:
-                pred = get_predictions(img_str)
-#                pred = str(ind)
-                cache.set(img_str, pred)
-            else:
-                pred = cache.get(img_str)
 
-            list_of_preds.append(pred)
+            # Hacky
+            img0 = img.split(',')[1]
+            imgdata = decodestring(img0.encode('ascii'))
+            
+            img_tmp_name = "img_tmp.jpg"
+            with open(img_tmp_name,"wb") as f:
+                f.write(imgdata)
+
+            # Get predictions
+            pred = get_predictions(img_tmp_name)
+            img1 = draw_preds(img_tmp_name, pred)
+
+            # Append to list
+            processed_imgs.append(img1)
+
+
         children = [
-            parse_contents(content, name, pred) for content, name, pred in
-            zip(list_of_contents, list_of_names, list_of_preds)]
+            parse_contents(content, name) for content, name in
+            zip(processed_imgs, list_of_names)]
         return children
 
 
@@ -113,15 +123,79 @@ def imstr2np(im_str):
     image = Image.open(BytesIO(decodestring(im_str)))
     return np.array(image)
 
-def predict_json_payload(img_str_list):
+def predict_json_payload(img_str):
     # Formats the json payload for the predict TF Serving API
-    payload = {"instances": [imstr2np(x).tolist() for x in img_str_list]}
+#    image = imread(io.BytesIO(base64.b64decode(img_str)))
+    image = Image.open(io.BytesIO(img_str))
+    payload = {"instances": [image.tolist()] }
     return payload
 
-def get_predictions(img_str):
-    payload = predict_json_payload([img_str])
+def get_predictions(filename, min_acc=0.5):
+    # Returns predictions from TF Serving as JSON
+
+    # Formulate REST payload
+    image = np.array(Image.open(filename)).tolist()
+    payload = {"instances": [image] }
     req = requests.post('http://tf_serving:8080/v1/models/default:predict', json=payload)
-    return req.json()
+
+    # Process return
+    raw_preds = req.json()['predictions'][0]
+    keep_list =  np.where(np.array(raw_preds['detection_scores'])>min_acc)[0]
+
+    preds = {y: [raw_preds[y][x] for x in keep_list] for y in ['detection_boxes', 'detection_scores', 'detection_classes']}
+    preds['num_detections'] =  len(keep_list)
+
+    return preds
+
+def spec(N):                                             
+    t = np.linspace(-510, 510, N)                                              
+    return np.round(np.clip(np.stack([-t, 510-np.abs(t), t], axis=1), 0, 255)).astype(np.uint8)
+
+def draw_preds(filename, preds):
+    # Draws predicted boxes on image
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # Get labels
+    # Load catergory labels
+    labels_path= './labels.txt'
+    with open(labels_path, 'r') as f:
+        labels = f.read()
+    labels = {k+1:v for k,v in enumerate(labels.split())}
+
+    # Load image
+    img = cv2.cvtColor(cv2.imread(filename), cv2.COLOR_BGR2RGB)
+    
+    h, w = img.shape[:2]
+    
+    n_cats = len(labels)
+    cmap = spec(n_cats)
+    
+    for i in range(preds['num_detections']):
+        det_class = int(preds['detection_classes'][i])
+        det_score = preds['detection_scores'][i] 
+        det_bbox  = preds['detection_boxes'][i] 
+        det_label = labels[det_class]
+        
+        # draw box
+        p1 = (int(det_bbox[1] * w), int(det_bbox[0] * h)) 
+        p2 = (int(det_bbox[3] * w), int(det_bbox[2] * h))
+        
+        col= tuple([int(x) for x in cmap[det_class]])
+        cv2.rectangle(img, p1, p2, col, thickness=2)
+        
+        # label box
+        cv2.putText(img,'%s, %4.2f'%(det_label, det_score),
+                    p1, font, 1, col, 2, cv2.LINE_AA)
+    
+    # Change colorspace before recoding
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    # Process into base64 string
+    retval, buffer = cv2.imencode('.jpg', img)
+    imgtxt = b64encode(buffer).decode()
+    return imgtxt
+    
+    
 
 if __name__ == '__main__':
     app.run_server(host='0.0.0.0',debug=True)
