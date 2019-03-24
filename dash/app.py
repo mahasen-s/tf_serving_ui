@@ -12,7 +12,7 @@ import io
 import numpy as np
 from io import BytesIO
 from PIL import Image
-from base64 import decodestring, b64encode
+from base64 import decodestring, b64encode, b64decode
 import os
 import flask
 import redis
@@ -76,23 +76,21 @@ def update_output(list_of_contents, list_of_names):
             
             if cache.exists(img) == False:
                 # Hacky
-                img0 = img.split(',')[1]
-                imgdata = decodestring(img0.encode('ascii'))
-                
-                img_tmp_name = "img_tmp.jpg"
-                with open(img_tmp_name,"wb") as f:
-                    f.write(imgdata)
+                imgstr = img.split(',')[1]
+                imgbytes = Image.open(BytesIO(b64decode(imgstr)))
+                imgarr = np.asarray(imgbytes)
 
                 # Get predictions
-                pred = get_predictions(img_tmp_name)
-                img1 = draw_preds(img_tmp_name, pred)
+                pred = get_predictions(imgarr)
+                imgpred = draw_preds(imgarr, pred)
 
                 # Add to cache
-                cache.set(img, pickle.dumps(img1))
-                
+                cache.set(img, pickle.dumps(imgpred))
+            
+            # Read through cache
             processed_imgs.append(pickle.loads(cache.get(img)))
 
-
+        # Update html
         children = [
             parse_contents(content, name) for content, name in
             zip(processed_imgs, list_of_names)]
@@ -130,12 +128,12 @@ def predict_json_payload(img_str):
     payload = {"instances": [image.tolist()] }
     return payload
 
-def get_predictions(filename, min_acc=0.5):
+def get_predictions(imgarr, min_acc=0.5):
     # Returns predictions from TF Serving as JSON
 
     # Formulate REST payload
-    image = np.array(Image.open(filename)).tolist()
-    payload = {"instances": [image] }
+    #image = np.array(Image.open(filename)).tolist()
+    payload = {"instances": [imgarr.tolist()] }
     req = requests.post('http://tf_serving:8080/v1/models/default:predict', json=payload)
 
     # Process return
@@ -151,7 +149,7 @@ def spec(N):
     t = np.linspace(-510, 510, N)                                              
     return np.round(np.clip(np.stack([-t, 510-np.abs(t), t], axis=1), 0, 255)).astype(np.uint8)
 
-def draw_preds(filename, preds):
+def draw_preds(imgarr, preds):
     # Draws predicted boxes on image
     font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -162,8 +160,9 @@ def draw_preds(filename, preds):
         labels = f.read()
     labels = {k+1:v for k,v in enumerate(labels.split())}
 
-    # Load image
-    img = cv2.cvtColor(cv2.imread(filename), cv2.COLOR_BGR2RGB)
+    # Load image, this might not do anything for pure numpy arrays
+    img = cv2.cvtColor(imgarr[:,:,(2,1,0)], cv2.COLOR_BGR2RGB)
+    
     
     h, w = img.shape[:2]
     
