@@ -155,7 +155,7 @@ def draw_preds(imgarr, preds):
 
     # Get labels
     # Load catergory labels
-    labels_path= './labels.txt'
+    labels_path= './model/labels.txt'
     with open(labels_path, 'r') as f:
         labels = f.read()
     labels = {k+1:v for k,v in enumerate(labels.split())}

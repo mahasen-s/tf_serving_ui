@@ -8,6 +8,8 @@ services:
             - redis
         ports:
             - 8050:8050
+        volumes:
+            - ./model:/usr/src/app/model
 
     redis:
         image: redis:alpine
@@ -16,6 +18,6 @@ services:
     tf_serving:
         build: ./tf_serving
         volumes:
-            - ./tf_serving/models:/models
+            - ./model:/models/object-detect/1
         ports:
             - 8085:8080
