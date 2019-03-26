@@ -19,7 +19,7 @@ import redis
 import requests
 import pickle
 import cv2
-
+import xml.etree.ElementTree
 
 
 
@@ -33,7 +33,7 @@ app.layout = html.Div([
         id='upload-image',
         children=html.Div([
             'Drag and Drop or ',
-            html.A('Select Files')
+            html.A('Select Images/Annotations (Pascal VOC)')
         ]),
         style={
             'width': '100%',
@@ -70,7 +70,92 @@ def parse_contents(contents, filename):
               [Input('upload-image', 'contents')],
               [State('upload-image', 'filename')])
 def update_output(list_of_contents, list_of_names):
-    processed_imgs = []
+    
+
+    img_formats = ['.jpeg','.jpg','.png','.JPG','.JPEG']
+    annotation_formats = ['.xml']
+
+    img_content_list = []
+    img_name_list = []
+    img_ext_list = []
+    img_pred_list = []
+
+    xml_content_list = []
+    xml_ext_list = []
+    xml_name_list = []
+
+    # Preprocess list of names
+    # Get image files
+    for i, name in enumerate(list_of_names):
+        fname, fext = os.path.splitext(name)
+
+        if fext in img_formats:
+            img_name_list.append(fname)
+            img_ext_list.append(fext)
+            img_content_list.append(list_of_contents[i])
+        elif fext in annotation_formats:
+            xml_name_list.append(fname)
+            xml_ext_list.append(fext)
+            xml_content_list.append(b64decode(list_of_contents[i].split(',')[1]).decode())
+
+    # Map images to annotations
+    img_dict_list = []
+    for i, img_fname in enumerate(img_name_list):
+        xml_name = None
+        xml_content = ''
+
+        if img_fname in xml_name_list:
+            xml_ind = xml_name_list.index(img_fname)
+            xml_name = img_fname + xml_ext_list[xml_ind]
+            xml_content = xml_content_list[xml_ind]
+
+        img_dict_list.append({'image_name': img_fname+img_ext_list[i],
+                    'image_content': img_content_list[i],
+                    'xml_name': xml_name,
+                    'xml_content': xml_content}
+                    )
+
+    if len(img_dict_list) > 0:
+        processed_imgs = []
+        processed_names = []
+        for i, img_dict in enumerate(img_dict_list):
+            # We use the img+xml content as a key for the cache
+            cache_key = img_dict['image_content']+img_dict['xml_content']
+            if cache.exists(cache_key) == False:
+                # Trim leading markup content and convert image b64 encoded string to np64 (and )
+                imgstr = img_dict['image_content'].split(',')[1]
+                imgbytes = Image.open(BytesIO(b64decode(imgstr)))
+                imgarr = np.asarray(imgbytes)
+
+                # Get predictions
+                pred = get_predictions(imgarr)
+
+                # Annotate image with predictions and groundtruth if it exists
+                if img_dict['xml_name'] is None:
+                    imgpred = draw_preds(imgarr, pred)
+                else:
+                    imgpred = draw_preds_with_groundtruth(imgarr, pred, img_dict['xml_content'])
+
+                # Add to cache
+                cache.set(cache_key, pickle.dumps(imgpred))
+            
+            # Read through cache
+            processed_imgs.append(pickle.loads(cache.get(cache_key)))
+            
+            # Get subheading
+            if img_dict['xml_name'] is None:
+                disp_name = img_dict['image_name']
+            else:
+                disp_name = '{} with predictions (left) and groundtruth (right) from {}'.format(img_dict['image_name'],img_dict['xml_name'])
+            processed_names.append(disp_name)
+
+        # Update html
+        children = [
+            parse_contents(content, name) for content, name in
+            zip(processed_imgs, processed_names)]
+        return children
+
+
     if list_of_contents is not None:
         for ind, img in enumerate(list_of_contents):
             
@@ -194,7 +279,82 @@ def draw_preds(imgarr, preds):
     imgtxt = b64encode(buffer).decode()
     return imgtxt
     
+def draw_preds_with_groundtruth(imgarr, preds, groundtruth_xml):
+    # Draws predicted boxes on image
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # Get labels
+    # Load catergory labels
+    labels_path= './model/labels.txt'
+    with open(labels_path, 'r') as f:
+        labels = f.read()
+    labels = {k+1:v for k,v in enumerate(labels.split())}
+    n_cats = len(labels)
+    cmap = {v[1]: tuple([int(j) for j in spec(n_cats)[i]]) for i, v in enumerate(labels.items())}
+
+    # Do prediction
+    img = cv2.cvtColor(imgarr[:,:,(2,1,0)], cv2.COLOR_BGR2RGB)
     
+    h, w = img.shape[:2]
+
+    for i in range(preds['num_detections']):
+        det_class = int(preds['detection_classes'][i])
+        det_score = preds['detection_scores'][i] 
+        det_bbox  = preds['detection_boxes'][i] 
+        det_label = labels[det_class]
+        
+        # draw box
+        p1 = (int(det_bbox[1] * w), int(det_bbox[0] * h)) 
+        p2 = (int(det_bbox[3] * w), int(det_bbox[2] * h))
+        
+        col= cmap[det_label]
+        cv2.rectangle(img, p1, p2, col, thickness=2)
+        
+        # label box
+        cv2.putText(img,'%s, %4.2f'%(det_label, det_score),
+                    p1, font, 1, col, 2, cv2.LINE_AA)
+
+    # Do groundtruth
+    img_gt = cv2.cvtColor(imgarr[:,:,(2,1,0)], cv2.COLOR_BGR2RGB)
+    
+    # Do groundtruth
+    img_gt = cv2.cvtColor(imgarr[:,:,(2,1,0)], cv2.COLOR_BGR2RGB)
+    
+    # Parse xml. gt_det_objs is a list of class:bbox dicts
+    gt_xml = xml.etree.ElementTree.fromstring(groundtruth_xml)
+    gt_det_objs = []
+    for x in gt_xml.findall('object'):
+         gt_det_objs.append(   (x.findall('name')[0].text, 
+                               [int(v.text) for v in x.findall('bndbox')[0] ]
+                           ))
+        
+    if len(gt_det_objs)>0:
+        for obj_class, obj_bbox in gt_det_objs:
+            det_label = obj_class
+            
+            p1 = (obj_bbox[0], obj_bbox[1])
+            p2 = (obj_bbox[2], obj_bbox[3])
+            
+            # Draw bbox
+            col= cmap[det_label]
+            cv2.rectangle(img_gt, p1, p2, col, thickness=2)
+        
+            # label box
+            cv2.putText(img_gt,'%s'%(det_label),
+                        p1, font, 1, col, 2, cv2.LINE_AA)
+    
+
+    # Do concatenation
+    img = np.concatenate((img, img_gt), axis=1)
+
+    # Change colorspace before recoding
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    # Process into base64 string
+    retval, buffer = cv2.imencode('.jpg', img)
+    imgtxt = b64encode(buffer).decode()
+    return imgtxt
+        
 
 if __name__ == '__main__':
     app.run_server(host='0.0.0.0',debug=True)
