@@ -20,6 +20,7 @@ import requests
 import pickle
 import cv2
 import xml.etree.ElementTree
+import copy
 
 
 
@@ -293,7 +294,7 @@ def draw_preds_with_groundtruth(imgarr, preds, groundtruth_xml):
     cmap = {v[1]: tuple([int(j) for j in spec(n_cats)[i]]) for i, v in enumerate(labels.items())}
 
     # Do prediction
-    img = cv2.cvtColor(imgarr[:,:,(2,1,0)], cv2.COLOR_BGR2RGB)
+    img = cv2.cvtColor(copy.deepcopy(imgarr[:,:,(2,1,0)]), cv2.COLOR_BGR2RGB)
     
     h, w = img.shape[:2]
 
@@ -315,10 +316,8 @@ def draw_preds_with_groundtruth(imgarr, preds, groundtruth_xml):
                     p1, font, 1, col, 2, cv2.LINE_AA)
 
     # Do groundtruth
-    img_gt = cv2.cvtColor(imgarr[:,:,(2,1,0)], cv2.COLOR_BGR2RGB)
+    img_gt = cv2.cvtColor(copy.deepcopy(imgarr[:,:,(2,1,0)]), cv2.COLOR_BGR2RGB)
     
-    # Do groundtruth
-    img_gt = cv2.cvtColor(imgarr[:,:,(2,1,0)], cv2.COLOR_BGR2RGB)
     
     # Parse xml. gt_det_objs is a list of class:bbox dicts
     gt_xml = xml.etree.ElementTree.fromstring(groundtruth_xml)
