@@ -17,6 +17,9 @@ services:
 
     tf_serving:
         build: ./tf_serving
+        runtime: nvidia
+        environment:
+            - NVIDIA_VISIBLE_DEVICES=all
         volumes:
             - ./model:/models/object-detect/1
         ports:
