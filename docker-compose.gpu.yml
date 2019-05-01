@@ -16,7 +16,9 @@ services:
         restart: always
 
     tf_serving:
-        build: ./tf_serving
+        build: 
+            context: ./tf_serving
+            dockerfile: DockerfileGPU
         runtime: nvidia
         environment:
             - NVIDIA_VISIBLE_DEVICES=all

@@ -1,4 +1,4 @@
-FROM tensorflow/serving:1.12.0-gpu
+FROM tensorflow/serving:1.12.0
 
 RUN mkdir -p /models/object-detect
 

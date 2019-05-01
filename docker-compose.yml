@@ -16,7 +16,9 @@ services:
         restart: always
 
     tf_serving:
-        build: ./tf_serving
+        build:
+            context: ./tf_serving
+            dockerfile: Dockerfile
         volumes:
             - ./model:/models/object-detect/1
         ports:
